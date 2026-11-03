@@ -163,37 +163,50 @@ static vector<Armor> pairBars(const vector<LightBar>& bars, const Params& p) {
             if (angleDiff > p.maxAngleDiff) continue;
 
 
-            // 沿灯条自身方向分解，目标倾斜时也不会误判，以灯条长轴倾斜取均值为y轴建立参考系
-            //
-            // 第一步：定 y 轴方向（沿灯条长轴，指向下方）
-            //   两根灯条的倾角取平均，再用 sin/cos 求出这个方向的单位向量
-            float avgTiltRad = (A.angle + B.angle) * 0.5f * (float)CV_PI / 180.0f;
-            float yAxisX = sin(avgTiltRad);   // y 轴方向的 x 分量
-            float yAxisY = cos(avgTiltRad);   // y 轴方向的 y 分量
+            // ---- 判断两根灯条能否组成一块装甲板 ----
+            // 三个几何关系：
+            //   1. 中心连线的长度 / 平均灯条长度  -> 间距是否合理
+            //   2. 中心连线与灯条的夹角            -> 是否接近 90°（两根灯条并排）
+            //   3. 连线沿灯条方向的分量 / 平均长度 -> 两根灯条是否大致等高
 
-            // 第二步：定垂直于 y 轴的方向（朝装甲板右侧）
-            //   把 y 轴方向顺时针转 90°：(x, y) -> (y, -x)
-            float perpX =  yAxisY;
-            float perpY = -yAxisX;
-
-            // 第三步：计算ab之间原坐标系中坐标差
+            // 两根灯条中心连线的向量和长度
             float dx = B.center.x - A.center.x;
             float dy = B.center.y - A.center.y;
+            float dist = sqrt(dx * dx + dy * dy);
 
-            // 第四步：把位移投影到两条轴上，得到 B 在新坐标系里的坐标
-            float bPerp  = dx * perpX  + dy * perpY;    // 垂直方向坐标 = 两根灯条的间距
-            float bAlong = dx * yAxisX + dy * yAxisY;   // 沿 y 轴坐标   = 两根灯条的高度差
+            // 间距比：连线长度是灯条长度的几倍
+            float gapRatio = dist / avgLen;
 
-            // 第五步：用新坐标判断
-            float gapRatio = fabs(bPerp)  / avgLen;
-            float dyRatio  = fabs(bAlong) / avgLen;
+            // 灯条长轴方向的单位向量（两根倾角取均值）
+            float avgTiltRad = (A.angle + B.angle) * 0.5f * (float)CV_PI / 180.0f;
+            float yAxisX = sin(avgTiltRad);
+            float yAxisY = cos(avgTiltRad);
+
+            // 连线在灯条方向上的投影长度 = |dx*axisX + dy*axisY|
+            // 它除以连线总长，就是"连线与灯条夹角"的余弦值
+            // 两根灯条并排时连线应该垂直于灯条，夹角接近 90°，余弦接近 0
+            float alongProj = fabs(dx * yAxisX + dy * yAxisY);
+            float cosAngle = (dist > 0.0f) ? alongProj / dist : 1.0f;
+
+            // 垂直度检查：夹角偏离 90° 超过 maxAngleFromPerp 度就丢弃
+            //   cos(90°-θ) = sin(θ)，用小角度近似 sinθ ≈ θ(弧度)
+            float sinTilt = cosAngle;
+            float angleFromPerp = asin(sinTilt > 1.0f ? 1.0f : sinTilt) * 180.0f / (float)CV_PI;
+            if (angleFromPerp > p.maxAngleFromPerp) continue;
+
+            // 高度差比：连线沿灯条方向的分量 / 平均长度
+            float dyRatio = alongProj / avgLen;
 
             if (dyRatio > p.maxDyRatio)    continue;
             if (gapRatio < p.minGapRatio)  continue;
             if (gapRatio > p.maxGapRatio)  continue;
 
-            // 第六步：左右判断也用新坐标
-            //   bPerp > 0 表示 B 在 A 的右侧（装甲板自身的右），与目标整体倾斜无关
+            // 左右判断：用连线在"垂直于灯条"方向上的符号
+            //   把灯条方向顺时针转 90° 得到朝右的方向
+            float rightX =  yAxisY;
+            float rightY = -yAxisX;
+            float bPerp = dx * rightX + dy * rightY;
+
             Armor ar;
             ar.color = A.color;
             ar.valid = true;

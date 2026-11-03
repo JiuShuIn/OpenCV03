@@ -31,6 +31,7 @@ struct Params{
     float maxDyRatio = 0.4f;      // 高度偏差上限（沿灯条方向的距离/平均长度）。应大致在同一水平线
     float minGapRatio = 1.0f;     // 间距下限（垂直灯条方向的距离/平均长度）。排除贴太近的
     float maxGapRatio = 3.0f;     // 间距上限。排除离太远、不相关的两个亮点
+    float maxAngleFromPerp = 15.0f; // 中心连线与灯条的夹角偏离 90° 的上限（度）。两根灯条应并排
 };
 
 // 用 enum class 而非 int/string：取值必须写 Color::RED，拼错会编译报错
