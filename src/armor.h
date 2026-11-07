@@ -28,8 +28,7 @@ struct Params{
     // ---- 灯条配对：两两组合，全部是相对比例，目标远近变化时仍成立 ----
     float minLengthRatio = 0.7f;  // 长度比下限（短/长）。两根灯条应大致等长
     float maxAngleDiff = 10.0f;   // 角度差上限（度）。两根灯条应大致平行
-    float maxDyRatio = 0.4f;      // 高度偏差上限（沿灯条方向的距离/平均长度）。应大致在同一水平线
-    float minGapRatio = 1.0f;     // 间距下限（垂直灯条方向的距离/平均长度）。排除贴太近的
+    float minGapRatio = 1.0f;     // 间距下限（中心连线长度/平均长度）。排除贴太近的
     float maxGapRatio = 3.0f;     // 间距上限。排除离太远、不相关的两个亮点
     float maxAngleFromPerp = 15.0f; // 中心连线与灯条的夹角偏离 90° 的上限（度）。两根灯条应并排
 };
@@ -58,7 +57,7 @@ struct Armor{
     cv::Rect    box;          // 轴对齐外接框，阶段 6 算
     cv::Point2f center;       // 中心点，阶段 6 算
     cv::Point2f corners[4];   // 左上 → 右上 → 右下 → 左下，阶段 6 算
-    int         leftId;       // 左灯条在 bars 里的下标
-    int         rightId;      // 右灯条在 bars 里的下标
+    int         barAId;       // 组成装甲板的灯条 A 在 bars 里的下标
+    int         barBId;       // 组成装甲板的灯条 B 在 bars 里的下标（不区分左右）
     bool        valid;        // 是否有效
 };

@@ -2,8 +2,8 @@
 // 装甲板识别 —— 程序入口
 //
 // 支持两种输入：
+//   视频：逐帧检测，把结果画在每一帧上，输出新视频（默认）
 //   图片：检测一次，保存 mask / 候选图 / 结果图
-//   视频：逐帧检测，把结果画在每一帧上，输出新视频
 // 检测逻辑全部在 armor_detect.cpp，main 只负责读写和显示
 // ============================================================
 
@@ -11,6 +11,7 @@
 #include "armor_detect.h"
 
 #include <opencv2/opencv.hpp>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -48,8 +49,9 @@ static void drawInfoPanel(cv::Mat& img, const DetectResult& r) {
     for (size_t k = 0; k < r.armors.size(); k++) {
         const Armor& ar = r.armors[k];
         char buf[160];
-        snprintf(buf, sizeof(buf), "[%zu] %s center=(%.1f,%.1f)",
-                 k, colorName(ar.color).c_str(), ar.center.x, ar.center.y);
+        snprintf(buf, sizeof(buf), "[%zu] %s center=(%.1f,%.1f) barA=%d barB=%d",
+                 k, colorName(ar.color).c_str(), ar.center.x, ar.center.y,
+                 ar.barAId, ar.barBId);
         lines.push_back(buf);
     }
     if (r.armors.empty()) {
@@ -60,11 +62,6 @@ static void drawInfoPanel(cv::Mat& img, const DetectResult& r) {
     const int thickness = 1;
     const int margin = 12;
     const int lineHeight = 22;
-
-    int baseline = 0;
-    cv::Size sample = cv::getTextSize("Ag", cv::FONT_HERSHEY_SIMPLEX,
-                                      fontScale, thickness, &baseline);
-    (void)sample;
 
     // 从下往上排：最后一行贴近底边
     int y = img.rows - margin;
@@ -79,6 +76,37 @@ static void drawInfoPanel(cv::Mat& img, const DetectResult& r) {
         cv::putText(img, lines[i], org, cv::FONT_HERSHEY_SIMPLEX,
                     fontScale, cv::Scalar(0, 255, 255), thickness);
         y -= lineHeight;
+    }
+}
+
+// 打印单帧检测结果到终端
+static void printResult(const DetectResult& result) {
+    cout << "轮廓总数 = " << result.contourCount << endl;
+    cout << "灯条 = " << result.bars.size() << " 根" << endl;
+    for (size_t k = 0; k < result.bars.size(); k++) {
+        const LightBar& b = result.bars[k];
+        cout << "  [灯条 " << b.id << "] center=(" << b.center.x << ","
+             << b.center.y << ") len=" << b.length
+             << " wid=" << b.width << " tilt=" << b.angle << endl;
+    }
+
+    cout << "装甲板 = " << result.armors.size() << " 块" << endl;
+    if (result.armors.empty()) {
+        cout << "未检测到装甲板" << endl;
+    }
+    for (size_t k = 0; k < result.armors.size(); k++) {
+        const Armor& ar = result.armors[k];
+        cout << "[装甲板 " << k << "] color=" << colorName(ar.color)
+             << " box=(" << ar.box.x << "," << ar.box.y << ","
+             << ar.box.width << "," << ar.box.height << ")"
+             << " center=(" << ar.center.x << "," << ar.center.y << ")" << endl;
+        cout << "  corners:";
+        for (int m = 0; m < 4; m++) {
+            cout << " " << m << "=(" << ar.corners[m].x << "," << ar.corners[m].y << ")";
+        }
+        cout << endl;
+        cout << "  barA=" << ar.barAId << " barB=" << ar.barBId
+             << " valid=" << (ar.valid ? 1 : 0) << endl;
     }
 }
 
@@ -117,34 +145,7 @@ static int runImage(const string& path) {
         return 1;
     }
 
-    // 终端输出
-    cout << "轮廓总数 = " << result.contourCount << endl;
-    cout << "灯条 = " << result.bars.size() << " 根" << endl;
-    for (size_t k = 0; k < result.bars.size(); k++) {
-        const LightBar& b = result.bars[k];
-        cout << "  [灯条 " << b.id << "] center=(" << b.center.x << ","
-             << b.center.y << ") len=" << b.length
-             << " wid=" << b.width << " tilt=" << b.angle << endl;
-    }
-    cout << "装甲板 = " << result.armors.size() << " 块" << endl;
-    if (result.armors.empty()) {
-        cout << "未检测到装甲板" << endl;
-    }
-    for (size_t k = 0; k < result.armors.size(); k++) {
-        const Armor& ar = result.armors[k];
-        cout << "[装甲板 " << k << "] color=" << colorName(ar.color)
-             << " box=(" << ar.box.x << "," << ar.box.y << ","
-             << ar.box.width << "," << ar.box.height << ")"
-             << " center=(" << ar.center.x << "," << ar.center.y << ")" << endl;
-        cout << "  corners:";
-        for (int m = 0; m < 4; m++) {
-            cout << " " << m << "=(" << ar.corners[m].x << "," << ar.corners[m].y << ")";
-        }
-        cout << endl;
-        cout << "  leftId=" << ar.leftId << " rightId=" << ar.rightId
-             << " valid=" << (ar.valid ? 1 : 0) << endl;
-    }
-
+    printResult(result);
     cout << "已保存 output/mask_red.png, output/bars.png, output/result.png" << endl;
     return 0;
 }
@@ -176,10 +177,11 @@ static int runVideo(const string& path, const string& outPath) {
         cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
         cv::VideoWriter::fourcc('X', 'V', 'I', 'D')
     };
+    const char* names[] = { "H.264", "MPEG-4", "XVID" };
     for (int i = 0; i < 3 && !writer.isOpened(); i++) {
         writer.open(outPath, fourccs[i], fps, cv::Size(width, height));
         if (writer.isOpened()) {
-            cout << "使用编码器: " << (i == 0 ? "H.264" : (i == 1 ? "MPEG-4" : "XVID")) << endl;
+            cout << "使用编码器: " << names[i] << endl;
         }
     }
     if (!writer.isOpened()) {
@@ -214,7 +216,6 @@ static int runVideo(const string& path, const string& outPath) {
         }
 
         writer.write(result.resultImage);
-
         if (!result.armors.empty()) armorFrames++;
 
         // 每 30 帧打印一次进度，避免刷屏
@@ -236,12 +237,13 @@ static int runVideo(const string& path, const string& outPath) {
 }
 
 int main(int argc, char** argv) {
-    string path = (argc > 1) ? argv[1] : "images/outpost_frame.png";
+    // 默认处理视频；传图片路径则走图片模式
+    string path    = (argc > 1) ? argv[1] : "input/Input_Video.mp4";
+    string outPath = (argc > 2) ? argv[2] : "output/result.mp4";
 
     filesystem::create_directories("output");
 
     if (isVideoPath(path)) {
-        string outPath = (argc > 2) ? argv[2] : "output/result.mp4";
         return runVideo(path, outPath);
     }
     return runImage(path);

@@ -1,6 +1,8 @@
-# 装甲板识别（静态图片）
+# 装甲板识别
 
-用传统视觉方法从前哨站图片中自动找出装甲板。流程：颜色分割 → 轮廓提取 → 灯条筛选 → 两两配对 → 几何计算。
+用传统视觉方法从前哨站画面中自动找出装甲板，支持**视频逐帧检测**和**单张图片检测**。
+
+流程：颜色分割 → 轮廓提取 → 灯条筛选 → 两两配对 → 几何计算。
 
 ## 环境要求
 
@@ -27,16 +29,35 @@ cmake --build build -j
 
 ## 运行
 
-```bash
-./build/armor_detect                              # 用默认图 images/outpost_frame.png
-./build/armor_detect images/outpost_frame.png     # 显式指定路径
-```
-
 **必须在项目根目录运行**，因为程序用相对路径读写文件。
 
-### 输出文件
+### 视频模式（默认）
 
-运行后在 `output/` 下生成三张图：
+不带参数时，处理 `input/Input_Video.mp4`，结果写到 `output/result.mp4`：
+
+```bash
+./build/armor_detect
+```
+
+也可以显式指定：
+
+```bash
+./build/armor_detect input/Input_Video.mp4 output/result.mp4
+```
+
+程序会逐帧检测，把检测结果（框、四角点、中心）画在每一帧上，并在**画面右下角**叠加与终端一致的信息面板，最后输出成新视频。
+
+编码器优先用 **H.264**（VS Code、浏览器可直接播放），失败时依次回退到 MPEG-4、XVID。
+
+### 图片模式
+
+传入图片路径即可：
+
+```bash
+./build/armor_detect images/outpost_frame.png
+```
+
+此时在 `output/` 下生成三张图：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -46,17 +67,29 @@ cmake --build build -j
 
 ### 终端输出
 
+图片模式输出：
+
 ```
-图像: images/outpost_frame.png  宽=1280 高=1024 通道=3
+图像: images/outpost_frame.png  宽=1280 高=1023 通道=3
 轮廓总数 = 12
-灯条候选 = 2 根
-  [灯条 0] center=(544.5,719.5) len=31 wid=9 tilt=0
-  [灯条 1] center=(621.5,712) len=32 wid=7 tilt=0
-装甲板候选 = 1 块
-[装甲板 0] color=RED box=(540,696,86,40) center=(582.5,715.75)
-  corners: 0=(540,704) 1=(625,696) 2=(625,728) 3=(540,735)
-  leftId=0 rightId=1 valid=1
+灯条 = 2 根
+  [灯条 0] center=(657.5,310) len=32 wid=7 tilt=0
+  [灯条 1] center=(734.5,302.5) len=31 wid=9 tilt=0
+装甲板 = 1 块
+[装甲板 0] color=RED box=(654,287,86,40) center=(696.5,306.25)
+  corners: 0=(654,294) 1=(739,287) 2=(739,318) 3=(654,326)
+  barA=0 barB=1 valid=1
 已保存 output/mask_red.png, output/bars.png, output/result.png
+```
+
+视频模式每 30 帧打印一次进度，最后汇总：
+
+```
+视频: input/Input_Video.mp4  1280x1024  fps=120  总帧数=1450
+使用编码器: H.264
+帧 0/1450  bars=1  armors=0
+...
+处理完成：共 1450 帧，其中 728 帧检测到装甲板
 ```
 
 没有候选时输出「未检测到装甲板」，退出码仍为 0。
@@ -93,38 +126,56 @@ cmake --build build -j
 
 | 量 | 计算 | 阈值 | 依据 |
 | --- | --- | --- | --- |
-| 面积 | `contourArea` | 60 ~ 400 | 噪点 ≤33，真灯条 172~193 |
+| 面积 | `contourArea` | 60 ~ 400 | 噪点 ≤33，真灯条 172~193；上限排除大面积背景结构 |
 | 长宽比 | 长边 / 短边（用 `minAreaRect`） | ≥ 2.0 | 真灯条 3.4~4.6，方形噪点 1.0~1.8 |
 | 填充率 | `contourArea / (w*h)` | ≥ 0.4 | 真灯条 0.69~0.77 |
-| 倾角 | 长轴与竖直方向夹角 | ≤ 60° | 排除接近水平的杂光 |
+| 倾角 | 长轴与竖直方向夹角 | ≤ 60° | 只排除接近水平的杂光（如墙面反光 tilt≈90），不限制目标自身倾斜 |
 
 **倾角自己算，不用 `rect.angle`**：OpenCV 4.5 前后 `angle` 定义不同，且 0° 和 90° 都返回 90。改为从 `rect.points()` 取 4 个顶点，找最长边，用 `atan2` 求方向。保留**符号**，因为配对时需要知道两根灯条是否朝同一方向倾斜。
 
 ### 3. 配对
 
-两根灯条两两组合，检查六个条件，全部用相对比例：
+两根灯条两两组合，检查五个条件：
 
 | 条件 | 表达式 | 阈值 |
 | --- | --- | --- |
 | 颜色一致 | `A.color == B.color` | |
 | 长度相近 | `min(len) / max(len)` | ≥ 0.7 |
 | 方向协调 | `abs(A.angle - B.angle)` | ≤ 10° |
-| 高度偏差 | `dyOff / avgLen` | ≤ 0.4 |
-| 间距下限 | `gap / avgLen` | ≥ 1.0 |
-| 间距上限 | `gap / avgLen` | ≤ 3.0 |
+| 间距 | `dist / avgLen` | 1.0 ~ 3.0 |
+| 垂直度 | 连线与灯条夹角偏离 90° | ≤ 15° |
 
-**`gap` 和 `dyOff` 沿灯条自身方向分解**，不用图像坐标的 dx/dy：
+**间距用中心连线的欧氏距离**：
 
 ```cpp
-axis = (sin(tilt), cos(tilt))    // 灯条长轴方向
-n    = (-axis.y, axis.x)         // 垂直方向
-gap   = |v · n|                  // 垂直间距
-dyOff = |v · axis|               // 沿灯条方向的高度差
+float dx = B.center.x - A.center.x;
+float dy = B.center.y - A.center.y;
+float dist = sqrt(dx*dx + dy*dy);
+float gapRatio = dist / avgLen;
 ```
 
-目标倾斜时，图像坐标的 dy 会把「整块板倾斜」误判成「两根灯条高度不一致」，导致漏检。
+欧氏距离是旋转不变量——目标怎么转，两根灯条之间的距离都不变，所以这条判断天然不受倾斜影响。
 
-左右判断：`center.x` 小的在左。去重：内层循环从 `i+1` 开始，每对只处理一次。
+**垂直度检查**：两根并排的灯条，中心连线应该垂直于灯条本身。
+
+```cpp
+// 灯条长轴方向（两根倾角取均值）
+float yAxisX = sin(avgTiltRad);
+float yAxisY = cos(avgTiltRad);
+
+// 连线在灯条方向上的投影
+float alongProj = fabs(dx * yAxisX + dy * yAxisY);
+
+// 投影占连线总长的比例 = 连线与灯条夹角的余弦
+float cosAngle = alongProj / dist;
+float angleFromPerp = asin(cosAngle) * 180.0f / CV_PI;
+```
+
+`alongProj / dist` 是「连线有多少比例落在灯条方向上」。连线完全垂直于灯条时，这个值是 0，`asin(0) = 0`，表示偏离垂直 0°。
+
+实测四张图（原图 + 三张旋转图）都在 5° 左右，阈值取 15° 留了余量。
+
+**去重**：内层循环从 `i+1` 开始，每对只处理一次。
 
 ### 4. 四角点顺序
 
@@ -135,10 +186,12 @@ dyOff = |v · axis|               // 沿灯条方向的高度差
 改用**象限法**：
 
 1. 装甲板中心 `C` = 两根灯条中心的中点
-2. 水平方向 `u` = 从左灯条指向右灯条（归一化）
-3. 垂直方向 `v` = `u` 逆时针转 90°
+2. 纵向轴 `v` = 两根灯条倾角的均值，换算成单位向量 `(sin, cos)`
+3. 横向轴 `u` = `v` 顺时针转 90°，即 `(v.y, -v.x)`
 4. 8 个顶点各自相对 `C` 求投影 `du`、`dv`，按正负分四个象限
 5. 每个象限里离 `C` 最远的点，就是那个角
+
+倾角均值满足交换律，`(A+B)/2 == (B+A)/2`，所以两根灯条谁先谁后不影响坐标轴方向。**配对阶段不需要判断左右**，`Armor` 只记录两根灯条的编号 `barAId`、`barBId`。
 
 用装甲板自身的方向而不是图像坐标轴，目标倾斜时顺序也不会乱。
 
@@ -153,21 +206,21 @@ OpenCV03/
 ├── docs/
 │   └── 问题记录.md
 ├── images/
-│   └── outpost_frame.png
-├── images_test/              # 自测用的旋转图（可选）
+│   └── outpost_frame.png     # 单张测试图
+├── images_test/              # 自测用的旋转图（不提交）
 ├── input/
-│   └── Input_Video.avi
-├── output/                   # 运行时生成
+│   └── Input_Video.mp4       # 默认输入视频
+├── output/                   # 运行时生成（不提交）
 └── src/
     ├── armor.h               # 数据结构：Color / LightBar / Armor / Params
     ├── armor_detect.h        # 单帧检测接口
     ├── armor_detect.cpp      # 检测流程实现
-    └── main.cpp              # 入口：读图、调用、打印、存图
+    └── main.cpp              # 入口：图片/视频两种模式
 ```
 
 ## 接口说明
 
-下一阶段接视频时，逐帧调用这个函数：
+视频模式就是逐帧调用这个函数：
 
 ```cpp
 bool detectArmor(const cv::Mat& bgr, const Params& p, DetectResult& out);
@@ -178,9 +231,9 @@ bool detectArmor(const cv::Mat& bgr, const Params& p, DetectResult& out);
 - 函数内不依赖全局变量，不写死任何坐标
 - 换图走同一套流程，返回 0 个、1 个或多个候选
 
-## 换图需要做什么
+## 换场景需要做什么
 
-颜色参数依赖具体场景。换一张图时：
+颜色参数依赖具体场景。换一个场景时：
 
 1. 在灯条区域取一小块，统计 H/S/V 的 10%~90% 分位
 2. 把结果放宽后填进 `Params::hMin/hMax/sMin/sMax/vMin/vMax`
@@ -199,3 +252,11 @@ bool detectArmor(const cv::Mat& bgr, const Params& p, DetectResult& out);
 ```
 
 三张图都应输出 1 块装甲板。
+
+视频模式可调参对比：
+
+```bash
+./build/armor_detect input/Input_Video.mp4 output/result.mp4
+```
+
+终端最后会打印「共 N 帧，其中 M 帧检测到装甲板」，可用于评估参数调整的效果。
