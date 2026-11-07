@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
             cout << " " << m << "=(" << ar.corners[m].x << "," << ar.corners[m].y << ")";
         }
         cout << endl;
-        cout << "  leftId=" << ar.leftId << " rightId=" << ar.rightId
+        cout << "  barA=" << ar.barAId << " barB=" << ar.barBId
              << " valid=" << (ar.valid ? 1 : 0) << endl;
     }
 

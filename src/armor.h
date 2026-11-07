@@ -57,7 +57,7 @@ struct Armor{
     cv::Rect    box;          // 轴对齐外接框，阶段 6 算
     cv::Point2f center;       // 中心点，阶段 6 算
     cv::Point2f corners[4];   // 左上 → 右上 → 右下 → 左下，阶段 6 算
-    int         leftId;       // 左灯条在 bars 里的下标
-    int         rightId;      // 右灯条在 bars 里的下标
+    int         barAId;       // 组成装甲板的灯条 A 在 bars 里的下标
+    int         barBId;       // 组成装甲板的灯条 B 在 bars 里的下标（不区分左右）
     bool        valid;        // 是否有效
 };
