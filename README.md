@@ -47,14 +47,14 @@ cmake --build build -j
 ### 终端输出
 
 ```
-图像: images/outpost_frame.png  宽=1280 高=1024 通道=3
+图像: images/outpost_frame.png  宽=1280 高=1023 通道=3
 轮廓总数 = 12
-灯条候选 = 2 根
-  [灯条 0] center=(544.5,719.5) len=31 wid=9 tilt=0
-  [灯条 1] center=(621.5,712) len=32 wid=7 tilt=0
-装甲板候选 = 1 块
-[装甲板 0] color=RED box=(540,696,86,40) center=(582.5,715.75)
-  corners: 0=(540,704) 1=(625,696) 2=(625,728) 3=(540,735)
+灯条 = 2 根
+  [灯条 0] center=(657.5,310) len=32 wid=7 tilt=0
+  [灯条 1] center=(734.5,302.5) len=31 wid=9 tilt=0
+装甲板 = 1 块
+[装甲板 0] color=RED box=(654,287,86,40) center=(696.5,306.25)
+  corners: 0=(654,294) 1=(739,287) 2=(739,318) 3=(654,326)
   leftId=0 rightId=1 valid=1
 已保存 output/mask_red.png, output/bars.png, output/result.png
 ```
@@ -93,38 +93,70 @@ cmake --build build -j
 
 | 量 | 计算 | 阈值 | 依据 |
 | --- | --- | --- | --- |
-| 面积 | `contourArea` | 60 ~ 400 | 噪点 ≤33，真灯条 172~193 |
+| 面积 | `contourArea` | 60 ~ 400 | 噪点 ≤33，真灯条 172~193；上限排除大面积背景结构 |
 | 长宽比 | 长边 / 短边（用 `minAreaRect`） | ≥ 2.0 | 真灯条 3.4~4.6，方形噪点 1.0~1.8 |
 | 填充率 | `contourArea / (w*h)` | ≥ 0.4 | 真灯条 0.69~0.77 |
-| 倾角 | 长轴与竖直方向夹角 | ≤ 60° | 排除接近水平的杂光 |
+| 倾角 | 长轴与竖直方向夹角 | ≤ 60° | 只排除接近水平的杂光（如墙面反光 tilt≈90），不限制目标自身倾斜 |
 
 **倾角自己算，不用 `rect.angle`**：OpenCV 4.5 前后 `angle` 定义不同，且 0° 和 90° 都返回 90。改为从 `rect.points()` 取 4 个顶点，找最长边，用 `atan2` 求方向。保留**符号**，因为配对时需要知道两根灯条是否朝同一方向倾斜。
 
 ### 3. 配对
 
-两根灯条两两组合，检查六个条件，全部用相对比例：
+两根灯条两两组合，检查五个条件：
 
 | 条件 | 表达式 | 阈值 |
 | --- | --- | --- |
 | 颜色一致 | `A.color == B.color` | |
 | 长度相近 | `min(len) / max(len)` | ≥ 0.7 |
 | 方向协调 | `abs(A.angle - B.angle)` | ≤ 10° |
-| 高度偏差 | `dyOff / avgLen` | ≤ 0.4 |
-| 间距下限 | `gap / avgLen` | ≥ 1.0 |
-| 间距上限 | `gap / avgLen` | ≤ 3.0 |
+| 间距 | `dist / avgLen` | 1.0 ~ 3.0 |
+| 垂直度 | 连线与灯条夹角偏离 90° | ≤ 15° |
 
-**`gap` 和 `dyOff` 沿灯条自身方向分解**，不用图像坐标的 dx/dy：
+**间距用中心连线的欧氏距离**：
 
 ```cpp
-axis = (sin(tilt), cos(tilt))    // 灯条长轴方向
-n    = (-axis.y, axis.x)         // 垂直方向
-gap   = |v · n|                  // 垂直间距
-dyOff = |v · axis|               // 沿灯条方向的高度差
+float dx = B.center.x - A.center.x;
+float dy = B.center.y - A.center.y;
+float dist = sqrt(dx*dx + dy*dy);
+float gapRatio = dist / avgLen;
 ```
 
-目标倾斜时，图像坐标的 dy 会把「整块板倾斜」误判成「两根灯条高度不一致」，导致漏检。
+欧氏距离是旋转不变量——目标怎么转，两根灯条之间的距离都不变，所以这条判断天然不受倾斜影响。
 
-左右判断：`center.x` 小的在左。去重：内层循环从 `i+1` 开始，每对只处理一次。
+**垂直度检查**：两根并排的灯条，中心连线应该垂直于灯条本身。
+
+```cpp
+// 灯条长轴方向（两根倾角取均值）
+float yAxisX = sin(avgTiltRad);
+float yAxisY = cos(avgTiltRad);
+
+// 连线在灯条方向上的投影
+float alongProj = fabs(dx * yAxisX + dy * yAxisY);
+
+// 投影占连线总长的比例 = 连线与灯条夹角的余弦
+float cosAngle = alongProj / dist;
+float angleFromPerp = asin(cosAngle) * 180.0f / CV_PI;
+```
+
+`alongProj / dist` 是「连线有多少比例落在灯条方向上」。连线完全垂直于灯条时，这个值是 0，`asin(0) = 0`，表示偏离垂直 0°。
+
+实测四张图（原图 + 三张旋转图）都在 5° 左右，阈值取 15° 留了余量。
+
+**左右判断**：用连线在「垂直于灯条、朝右」方向上的符号。
+
+```cpp
+// 灯条方向顺时针转 90° = 朝右
+float rightX =  yAxisY;
+float rightY = -yAxisX;
+float bPerp = dx * rightX + dy * rightY;
+
+if (bPerp > 0) { 左 = A, 右 = B; }
+else           { 左 = B, 右 = A; }
+```
+
+不用图像坐标的 `center.x` 大小，因为目标倾斜较大时，「图像上 x 更大的那根」不一定就是「装甲板自身右边的」那根。
+
+**去重**：内层循环从 `i+1` 开始，每对只处理一次。
 
 ### 4. 四角点顺序
 
@@ -154,15 +186,15 @@ OpenCV03/
 │   └── 问题记录.md
 ├── images/
 │   └── outpost_frame.png
-├── images_test/              # 自测用的旋转图（可选）
+├── images_test/              # 自测用的旋转图（不提交）
 ├── input/
-│   └── Input_Video.avi
+│   └── Input_Video.mp4       # 原始视频（本阶段不使用）
 ├── output/                   # 运行时生成
 └── src/
     ├── armor.h               # 数据结构：Color / LightBar / Armor / Params
     ├── armor_detect.h        # 单帧检测接口
     ├── armor_detect.cpp      # 检测流程实现
-    └── main.cpp              # 入口：读图、调用、打印、存图
+    └── main.cpp              # 入口：读图、调用 detectArmor、打印、存图
 ```
 
 ## 接口说明

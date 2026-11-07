@@ -28,8 +28,7 @@ struct Params{
     // ---- 灯条配对：两两组合，全部是相对比例，目标远近变化时仍成立 ----
     float minLengthRatio = 0.7f;  // 长度比下限（短/长）。两根灯条应大致等长
     float maxAngleDiff = 10.0f;   // 角度差上限（度）。两根灯条应大致平行
-    float maxDyRatio = 0.4f;      // 高度偏差上限（沿灯条方向的距离/平均长度）。应大致在同一水平线
-    float minGapRatio = 1.0f;     // 间距下限（垂直灯条方向的距离/平均长度）。排除贴太近的
+    float minGapRatio = 1.0f;     // 间距下限（中心连线长度/平均长度）。排除贴太近的
     float maxGapRatio = 3.0f;     // 间距上限。排除离太远、不相关的两个亮点
     float maxAngleFromPerp = 15.0f; // 中心连线与灯条的夹角偏离 90° 的上限（度）。两根灯条应并排
 };

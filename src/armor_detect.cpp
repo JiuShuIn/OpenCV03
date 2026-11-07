@@ -129,13 +129,10 @@ static vector<LightBar> filterBars(const vector<vector<cv::Point>>& contours,
 // 输入：灯条候选列表、阈值参数
 // 输出：装甲板候选列表，记录了颜色和左右灯条的编号
 //
-// 判断依据只有两条：
-//   1. 横向隔多远（gapRatio）—— 装甲板间距约为灯条长度的 1~3 倍
-//   2. 纵向差多少（dyRatio）—— 同一块板上的两根灯条应该一样高
+// 判断依据：
+//   1. 间距（gapRatio）—— 中心连线长度约为灯条长度的 1~3 倍
+//   2. 垂直度（angleFromPerp）—— 中心连线应与灯条垂直，偏离不超过 15°
 // 所有条件用相对比例，目标远近变化时仍成立。
-//
-// 难点：目标倾斜时，图像上的"竖直方向"量不出"一样高"。
-//       所以以灯条长轴为 y 轴建立新坐标系，在新坐标系里判断。
 // ------------------------------------------------------------
 static vector<Armor> pairBars(const vector<LightBar>& bars, const Params& p) {
     vector<Armor> armors;
@@ -164,10 +161,9 @@ static vector<Armor> pairBars(const vector<LightBar>& bars, const Params& p) {
 
 
             // ---- 判断两根灯条能否组成一块装甲板 ----
-            // 三个几何关系：
+            // 两个几何关系：
             //   1. 中心连线的长度 / 平均灯条长度  -> 间距是否合理
             //   2. 中心连线与灯条的夹角            -> 是否接近 90°（两根灯条并排）
-            //   3. 连线沿灯条方向的分量 / 平均长度 -> 两根灯条是否大致等高
 
             // 两根灯条中心连线的向量和长度
             float dx = B.center.x - A.center.x;
@@ -194,10 +190,6 @@ static vector<Armor> pairBars(const vector<LightBar>& bars, const Params& p) {
             float angleFromPerp = asin(sinTilt > 1.0f ? 1.0f : sinTilt) * 180.0f / (float)CV_PI;
             if (angleFromPerp > p.maxAngleFromPerp) continue;
 
-            // 高度差比：连线沿灯条方向的分量 / 平均长度
-            float dyRatio = alongProj / avgLen;
-
-            if (dyRatio > p.maxDyRatio)    continue;
             if (gapRatio < p.minGapRatio)  continue;
             if (gapRatio > p.maxGapRatio)  continue;
 
