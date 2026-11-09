@@ -1,6 +1,8 @@
-# 装甲板识别（静态图片）
+# 装甲板识别
 
-用传统视觉方法从前哨站图片中自动找出装甲板。流程：颜色分割 → 轮廓提取 → 灯条筛选 → 两两配对 → 几何计算。
+用传统视觉方法从前哨站画面中自动找出装甲板，支持**视频逐帧检测**和**单张图片检测**。
+
+流程：颜色分割 → 轮廓提取 → 灯条筛选 → 两两配对 → 几何计算。
 
 ## 环境要求
 
@@ -27,16 +29,35 @@ cmake --build build -j
 
 ## 运行
 
-```bash
-./build/armor_detect                              # 用默认图 images/outpost_frame.png
-./build/armor_detect images/outpost_frame.png     # 显式指定路径
-```
-
 **必须在项目根目录运行**，因为程序用相对路径读写文件。
 
-### 输出文件
+### 视频模式（默认）
 
-运行后在 `output/` 下生成三张图：
+不带参数时，处理 `input/Input_Video.mp4`，结果写到 `output/result.mp4`：
+
+```bash
+./build/armor_detect
+```
+
+也可以显式指定：
+
+```bash
+./build/armor_detect input/Input_Video.mp4 output/result.mp4
+```
+
+程序会逐帧检测，把检测结果（框、四角点、中心）画在每一帧上，并在**画面右下角**叠加与终端一致的信息面板，最后输出成新视频。
+
+编码器优先用 **H.264**（VS Code、浏览器可直接播放），失败时依次回退到 MPEG-4、XVID。
+
+### 图片模式
+
+传入图片路径即可：
+
+```bash
+./build/armor_detect images/outpost_frame.png
+```
+
+此时在 `output/` 下生成三张图：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -45,6 +66,8 @@ cmake --build build -j
 | `result.png` | 最终结果图，绿框是外接框，紫点是四角点（标注 0/1/2/3），红点是中心 |
 
 ### 终端输出
+
+图片模式输出：
 
 ```
 图像: images/outpost_frame.png  宽=1280 高=1023 通道=3
@@ -57,6 +80,16 @@ cmake --build build -j
   corners: 0=(654,294) 1=(739,287) 2=(739,318) 3=(654,326)
   barA=0 barB=1 valid=1
 已保存 output/mask_red.png, output/bars.png, output/result.png
+```
+
+视频模式每 30 帧打印一次进度，最后汇总：
+
+```
+视频: input/Input_Video.mp4  1280x1024  fps=120  总帧数=1450
+使用编码器: H.264
+帧 0/1450  bars=1  armors=0
+...
+处理完成：共 1450 帧，其中 728 帧检测到装甲板
 ```
 
 没有候选时输出「未检测到装甲板」，退出码仍为 0。
@@ -158,7 +191,7 @@ float angleFromPerp = asin(cosAngle) * 180.0f / CV_PI;
 4. 8 个顶点各自相对 `C` 求投影 `du`、`dv`，按正负分四个象限
 5. 每个象限里离 `C` 最远的点，就是那个角
 
-倾角均值满足交换律，`(A+B)/2 == (B+A)/2`，所以两根灯条谁先谁后不影响坐标轴方向。配对阶段不需要判断左右，`Armor` 只记录两根灯条的编号 `barAId`、`barBId`。
+倾角均值满足交换律，`(A+B)/2 == (B+A)/2`，所以两根灯条谁先谁后不影响坐标轴方向。**配对阶段不需要判断左右**，`Armor` 只记录两根灯条的编号 `barAId`、`barBId`。
 
 用装甲板自身的方向而不是图像坐标轴，目标倾斜时顺序也不会乱。
 
@@ -173,21 +206,21 @@ OpenCV03/
 ├── docs/
 │   └── 问题记录.md
 ├── images/
-│   └── outpost_frame.png
+│   └── outpost_frame.png     # 单张测试图
 ├── images_test/              # 自测用的旋转图（不提交）
 ├── input/
-│   └── Input_Video.mp4       # 原始视频（本阶段不使用）
-├── output/                   # 运行时生成
+│   └── Input_Video.mp4       # 默认输入视频
+├── output/                   # 运行时生成（不提交）
 └── src/
     ├── armor.h               # 数据结构：Color / LightBar / Armor / Params
     ├── armor_detect.h        # 单帧检测接口
     ├── armor_detect.cpp      # 检测流程实现
-    └── main.cpp              # 入口：读图、调用 detectArmor、打印、存图
+    └── main.cpp              # 入口：图片/视频两种模式
 ```
 
 ## 接口说明
 
-下一阶段接视频时，逐帧调用这个函数：
+视频模式就是逐帧调用这个函数：
 
 ```cpp
 bool detectArmor(const cv::Mat& bgr, const Params& p, DetectResult& out);
@@ -198,9 +231,9 @@ bool detectArmor(const cv::Mat& bgr, const Params& p, DetectResult& out);
 - 函数内不依赖全局变量，不写死任何坐标
 - 换图走同一套流程，返回 0 个、1 个或多个候选
 
-## 换图需要做什么
+## 换场景需要做什么
 
-颜色参数依赖具体场景。换一张图时：
+颜色参数依赖具体场景。换一个场景时：
 
 1. 在灯条区域取一小块，统计 H/S/V 的 10%~90% 分位
 2. 把结果放宽后填进 `Params::hMin/hMax/sMin/sMax/vMin/vMax`
@@ -219,3 +252,11 @@ bool detectArmor(const cv::Mat& bgr, const Params& p, DetectResult& out);
 ```
 
 三张图都应输出 1 块装甲板。
+
+视频模式可调参对比：
+
+```bash
+./build/armor_detect input/Input_Video.mp4 output/result.mp4
+```
+
+终端最后会打印「共 N 帧，其中 M 帧检测到装甲板」，可用于评估参数调整的效果。
