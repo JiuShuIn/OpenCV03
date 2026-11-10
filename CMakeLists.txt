@@ -37,6 +37,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_executable(armor_detect
     src/main.cpp
     src/armor_detect.cpp
+    src/pose.cpp
 )
 
 # 让编译器能找到 <opencv2/opencv.hpp> 这类头文件。
